@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Turn on Govee lights at sunset for Denver, CO.
+Govee lights automation for Denver, CO.
+- Turn on at sunset
+- Turn off at 1am
 Designed to run via GitHub Actions on a schedule.
 """
 
 import os
 import sys
-import json
 import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -18,6 +19,9 @@ TIMEZONE = ZoneInfo("America/Denver")
 
 # How close to sunset (in minutes) to trigger
 SUNSET_WINDOW_MINUTES = 10
+
+# What hour to turn off lights (in local time)
+OFF_HOUR = 1  # 1am
 
 GOVEE_API_BASE = "https://openapi.api.govee.com"
 
@@ -76,8 +80,8 @@ def get_govee_devices(api_key: str) -> list:
     return data.get("data", [])
 
 
-def turn_on_device(api_key: str, device: dict) -> bool:
-    """Turn on a single Govee device."""
+def set_device_power(api_key: str, device: dict, turn_on: bool) -> bool:
+    """Turn a Govee device on or off."""
     url = f"{GOVEE_API_BASE}/router/api/v1/device/control"
     headers = {
         "Content-Type": "application/json",
@@ -95,15 +99,16 @@ def turn_on_device(api_key: str, device: dict) -> bool:
         print(f"  Device {device.get('deviceName')} doesn't support power control, skipping")
         return False
 
+    action = "on" if turn_on else "off"
     payload = {
-        "requestId": f"sunset-{datetime.now().timestamp()}",
+        "requestId": f"{action}-{datetime.now().timestamp()}",
         "payload": {
             "sku": device["sku"],
             "device": device["device"],
             "capability": {
                 "type": "devices.capabilities.on_off",
                 "instance": "powerSwitch",
-                "value": 1  # 1 = on, 0 = off
+                "value": 1 if turn_on else 0
             }
         }
     }
@@ -114,11 +119,60 @@ def turn_on_device(api_key: str, device: dict) -> bool:
 
     success = data.get("code") == 200
     if success:
-        print(f"  Turned on: {device.get('deviceName', device['device'])}")
+        print(f"  Turned {action}: {device.get('deviceName', device['device'])}")
     else:
-        print(f"  Failed to turn on {device.get('deviceName')}: {data}")
+        print(f"  Failed to turn {action} {device.get('deviceName')}: {data}")
 
     return success
+
+
+def run_sunset_on(api_key: str, force: bool):
+    """Turn on lights at sunset."""
+    sunset = get_sunset_time()
+
+    if not force and not is_sunset_time(sunset):
+        print("Not sunset time yet, exiting.")
+        sys.exit(0)
+
+    if force:
+        print("Force flag set, running regardless of time.")
+    else:
+        print("It's sunset time! Turning on lights...")
+
+    devices = get_govee_devices(api_key)
+    print(f"Found {len(devices)} Govee device(s)")
+
+    if not devices:
+        print("No devices found.")
+        sys.exit(0)
+
+    success_count = 0
+    for device in devices:
+        print(f"\nProcessing: {device.get('deviceName', 'Unknown')} ({device['sku']})")
+        if set_device_power(api_key, device, turn_on=True):
+            success_count += 1
+
+    print(f"\nDone! Turned on {success_count}/{len(devices)} device(s)")
+
+
+def run_lights_off(api_key: str):
+    """Turn off all lights (for 1am schedule)."""
+    print(f"Turning off all lights...")
+
+    devices = get_govee_devices(api_key)
+    print(f"Found {len(devices)} Govee device(s)")
+
+    if not devices:
+        print("No devices found.")
+        sys.exit(0)
+
+    success_count = 0
+    for device in devices:
+        print(f"\nProcessing: {device.get('deviceName', 'Unknown')} ({device['sku']})")
+        if set_device_power(api_key, device, turn_on=False):
+            success_count += 1
+
+    print(f"\nDone! Turned off {success_count}/{len(devices)} device(s)")
 
 
 def main():
@@ -127,35 +181,27 @@ def main():
         print("Error: GOVEE_API_KEY environment variable not set")
         sys.exit(1)
 
-    # Check for force flag (useful for testing)
+    # Determine action: "sunset" (default), "off", or "on"
+    action = os.environ.get("ACTION", "sunset").lower()
+    if len(sys.argv) > 1 and sys.argv[1] in ("sunset", "off", "on"):
+        action = sys.argv[1]
+
     force = "--force" in sys.argv or os.environ.get("FORCE_RUN") == "true"
 
     try:
-        sunset = get_sunset_time()
-
-        if not force and not is_sunset_time(sunset):
-            print("Not sunset time yet, exiting.")
-            sys.exit(0)
-
-        if force:
-            print("Force flag set, running regardless of time.")
+        if action == "off":
+            run_lights_off(api_key)
+        elif action == "on":
+            # Direct on, no sunset check
+            print("Turning on all lights...")
+            devices = get_govee_devices(api_key)
+            print(f"Found {len(devices)} Govee device(s)")
+            for device in devices:
+                print(f"\nProcessing: {device.get('deviceName', 'Unknown')} ({device['sku']})")
+                set_device_power(api_key, device, turn_on=True)
         else:
-            print("It's sunset time! Turning on lights...")
-
-        devices = get_govee_devices(api_key)
-        print(f"Found {len(devices)} Govee device(s)")
-
-        if not devices:
-            print("No devices found. Make sure your devices are WiFi-enabled and linked to your Govee account.")
-            sys.exit(0)
-
-        success_count = 0
-        for device in devices:
-            print(f"\nProcessing: {device.get('deviceName', 'Unknown')} ({device['sku']})")
-            if turn_on_device(api_key, device):
-                success_count += 1
-
-        print(f"\nDone! Turned on {success_count}/{len(devices)} device(s)")
+            # Default: sunset mode
+            run_sunset_on(api_key, force)
 
     except requests.RequestException as e:
         print(f"API request failed: {e}")
