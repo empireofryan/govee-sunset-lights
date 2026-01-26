@@ -1,0 +1,42 @@
+name: Sunset Lights
+
+on:
+  # Run every 10 minutes during Denver's sunset window (covers all seasons)
+  # Winter sunsets: ~4:35 PM MST (23:35 UTC)
+  # Summer sunsets: ~8:31 PM MDT (02:31 UTC)
+  schedule:
+    # Every 10 min from 22:00-23:59 UTC
+    - cron: '*/10 22-23 * * *'
+    # Every 10 min from 00:00-03:00 UTC
+    - cron: '*/10 0-3 * * *'
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force turn on lights regardless of time'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  sunset-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run sunset lights script
+        env:
+          GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
+          FORCE_RUN: ${{ inputs.force }}
+        run: python sunset_lights.py
