@@ -60,3 +60,4 @@ jobs:
           GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
           ACTION: ${{ steps.action.outputs.action }}
         run: python sunset_lights.py
+# Trigger scheduled runs
