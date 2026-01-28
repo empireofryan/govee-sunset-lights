@@ -1,0 +1,26 @@
+name: Lights On (Sunset)
+
+on:
+  schedule:
+    # Denver sunset window - every 10 min from 4:30 PM to 8:30 PM
+    # Winter: 4:30 PM MST = 23:30 UTC
+    # Summer: 8:30 PM MDT = 02:30 UTC
+    - cron: '*/10 22-23 * * *'
+    - cron: '*/10 0-2 * * *'
+
+  workflow_dispatch:
+
+jobs:
+  lights-on:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Turn on lights at sunset
+        env:
+          GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
+          ACTION: 'sunset'
+        run: python sunset_lights.py

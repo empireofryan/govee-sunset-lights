@@ -1,0 +1,24 @@
+name: Lights Off (1 AM)
+
+on:
+  schedule:
+    # 1am MST = 8:00 UTC (winter) / 1am MDT = 7:00 UTC (summer)
+    - cron: '0 7 * * *'
+    - cron: '0 8 * * *'
+
+  workflow_dispatch:
+
+jobs:
+  lights-off:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Turn off lights
+        env:
+          GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
+          ACTION: 'off'
+        run: python sunset_lights.py
