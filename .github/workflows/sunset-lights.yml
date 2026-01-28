@@ -1,20 +1,18 @@
 name: Govee Lights
 
 on:
+  # External trigger via GitHub API (for cron-job.org)
+  repository_dispatch:
+    types: [sunset, lights-off]
+
+  # Backup: GitHub's built-in schedule (unreliable)
   schedule:
-    # Sunset: Every 10 min during Denver's sunset window (covers all seasons)
-    # Winter sunsets: ~4:35 PM MST (23:35 UTC)
-    # Summer sunsets: ~8:31 PM MDT (02:31 UTC)
     - cron: '*/10 22-23 * * *'
     - cron: '*/10 0-3 * * *'
-
-    # Lights off at 1am Denver time
-    # 1am MST (winter) = 8:00 UTC
-    # 1am MDT (summer) = 7:00 UTC
     - cron: '0 7 * * *'
     - cron: '0 8 * * *'
 
-  # Allow manual trigger for testing
+  # Manual trigger
   workflow_dispatch:
     inputs:
       action:
@@ -43,16 +41,25 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Determine action from schedule
+      - name: Determine action
         id: action
         run: |
-          HOUR=$(date -u +%H)
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "action=${{ inputs.action }}" >> $GITHUB_OUTPUT
-          elif [[ "$HOUR" == "07" || "$HOUR" == "08" ]]; then
-            echo "action=off" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            if [[ "${{ github.event.action }}" == "lights-off" ]]; then
+              echo "action=off" >> $GITHUB_OUTPUT
+            else
+              echo "action=sunset" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "action=sunset" >> $GITHUB_OUTPUT
+            # Scheduled run - determine by hour
+            HOUR=$(date -u +%H)
+            if [[ "$HOUR" == "07" || "$HOUR" == "08" ]]; then
+              echo "action=off" >> $GITHUB_OUTPUT
+            else
+              echo "action=sunset" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Run lights script
@@ -60,4 +67,3 @@ jobs:
           GOVEE_API_KEY: ${{ secrets.GOVEE_API_KEY }}
           ACTION: ${{ steps.action.outputs.action }}
         run: python sunset_lights.py
-# Trigger scheduled runs
