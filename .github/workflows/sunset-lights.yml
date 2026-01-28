@@ -5,10 +5,10 @@ on:
   repository_dispatch:
     types: [sunset, lights-off]
 
-  # TEST: 7:51 PM MST = 02:51 UTC, 7:52 PM MST = 02:52 UTC
+  # TEST: 8:04 PM MST = 03:04 UTC, 8:05 PM MST = 03:05 UTC
   schedule:
-    - cron: '51 2 * * *'  # 7:51 PM MST - lights OFF
-    - cron: '52 2 * * *'  # 7:52 PM MST - lights ON
+    - cron: '4 3 * * *'   # 8:04 PM MST - lights OFF
+    - cron: '5 3 * * *'   # 8:05 PM MST - lights ON
 
   # Manual trigger
   workflow_dispatch:
@@ -53,7 +53,7 @@ jobs:
           else
             # Scheduled run - determine by minute (TEST MODE)
             MINUTE=$(date -u +%M)
-            if [[ "$MINUTE" == "51" ]]; then
+            if [[ "$MINUTE" == "04" ]]; then
               echo "action=off" >> $GITHUB_OUTPUT
             else
               echo "action=on" >> $GITHUB_OUTPUT
