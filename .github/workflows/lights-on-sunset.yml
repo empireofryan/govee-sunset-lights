@@ -1,6 +1,9 @@
 name: Lights On (Sunset)
 
 on:
+  repository_dispatch:
+    types: [lights-on]
+
   schedule:
     # Denver sunset window - every 10 min from 4:30 PM to 8:30 PM
     # Winter: 4:30 PM MST = 23:30 UTC

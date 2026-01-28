@@ -1,6 +1,9 @@
 name: Lights Off (1 AM)
 
 on:
+  repository_dispatch:
+    types: [lights-off]
+
   schedule:
     # 1am MST = 8:00 UTC (winter) / 1am MDT = 7:00 UTC (summer)
     - cron: '0 7 * * *'
