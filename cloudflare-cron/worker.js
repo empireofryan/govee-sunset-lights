@@ -2,17 +2,20 @@ const GOVEE_API = 'https://openapi.api.govee.com/router/api/v1';
 const DENVER_LAT = 39.7392;
 const DENVER_LNG = -104.9903;
 
+// Auto-off hour in Denver local time (1 AM)
+const OFF_HOUR_LOCAL = 1;
+
 export default {
   async scheduled(event, env, ctx) {
-    const hour = new Date().getUTCHours();
+    const denverHour = getDenverHour();
 
-    // 8:00 UTC = 1:00 AM MST - lights off
-    if (hour === 8) {
-      await controlAllLights(env, false);
-      console.log('Lights OFF - 1:00 AM MST');
+    // Turn off at 1:00 AM Denver time (works for both MST and MDT)
+    if (denverHour === OFF_HOUR_LOCAL) {
+      console.log(`Lights OFF - 1:00 AM Denver time (UTC hour: ${new Date().getUTCHours()})`);
+      await controlAllLightsWithRetry(env, false);
     }
-    // 22:00-02:00 UTC = 3PM-7PM MST window - check for sunset
-    else if (hour >= 22 || hour <= 2) {
+    // Sunset window: 3PM-7PM Denver time - check for sunset
+    else if (denverHour >= 15 && denverHour <= 19) {
       await checkSunsetAndTurnOn(env);
     }
   },
@@ -21,11 +24,11 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === '/on') {
-      await controlAllLights(env, true);
+      await controlAllLightsWithRetry(env, true);
       return new Response('Lights ON');
     }
     if (url.pathname === '/off') {
-      await controlAllLights(env, false);
+      await controlAllLightsWithRetry(env, false);
       return new Response('Lights OFF');
     }
     if (url.pathname === '/sunset') {
@@ -43,12 +46,18 @@ export default {
   }
 };
 
+function getDenverHour() {
+  // Get current hour in Denver, correctly handling MST/MDT via Intl API
+  const denverTime = new Date().toLocaleString('en-US', { timeZone: 'America/Denver', hour12: false });
+  // Format: "M/D/YYYY, HH:MM:SS"
+  const timePart = denverTime.split(', ')[1];
+  return parseInt(timePart.split(':')[0], 10);
+}
+
 function getDenverDate() {
-  // Get current date in Denver (UTC-7) to avoid UTC date boundary issues
-  const now = new Date();
-  const denverOffset = -7 * 60; // MST is UTC-7
-  const denverTime = new Date(now.getTime() + denverOffset * 60 * 1000);
-  return denverTime.toISOString().split('T')[0];
+  // Get current date in Denver, correctly handling MST/MDT via Intl API
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Denver' }); // en-CA gives YYYY-MM-DD
+  return formatter.format(new Date());
 }
 
 async function checkSunsetAndTurnOn(env) {
@@ -149,6 +158,33 @@ async function getDeviceStatus(env) {
   }
 }
 
+async function controlAllLightsWithRetry(env, turnOn, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const results = await controlAllLights(env, turnOn);
+      const failedDevices = results.filter(r => !r.success);
+
+      if (failedDevices.length === 0) {
+        console.log(`All devices ${turnOn ? 'ON' : 'OFF'} (attempt ${attempt})`);
+        return;
+      }
+
+      console.log(`Attempt ${attempt}: ${failedDevices.length} device(s) failed`);
+
+      if (attempt < maxRetries) {
+        // Exponential backoff: 2s, 4s
+        await new Promise(r => setTimeout(r, 2000 * attempt));
+      }
+    } catch (err) {
+      console.error(`Attempt ${attempt} error:`, err);
+      if (attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, 2000 * attempt));
+      }
+    }
+  }
+  console.error(`Failed to turn ${turnOn ? 'on' : 'off'} all lights after ${maxRetries} attempts`);
+}
+
 async function controlAllLights(env, turnOn) {
   const headers = {
     'Content-Type': 'application/json',
@@ -162,10 +198,10 @@ async function controlAllLights(env, turnOn) {
 
   console.log(`Found ${devices.length} devices`);
 
-  // Control each device
-  for (const device of devices) {
+  // Control all devices in parallel
+  const results = await Promise.all(devices.map(async (device) => {
     try {
-      await fetch(`${GOVEE_API}/device/control`, {
+      const res = await fetch(`${GOVEE_API}/device/control`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -181,9 +217,15 @@ async function controlAllLights(env, turnOn) {
           }
         })
       });
-      console.log(`${turnOn ? 'ON' : 'OFF'}: ${device.deviceName}`);
+      const data = await res.json();
+      const success = data.code === 200;
+      console.log(`${turnOn ? 'ON' : 'OFF'}: ${device.deviceName} - ${success ? 'OK' : 'FAILED'}`);
+      return { device: device.deviceName, success };
     } catch (err) {
       console.error(`Failed to control ${device.deviceName}:`, err);
+      return { device: device.deviceName, success: false };
     }
-  }
+  }));
+
+  return results;
 }

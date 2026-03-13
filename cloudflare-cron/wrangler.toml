@@ -7,9 +7,7 @@ compatibility_date = "2024-01-01"
 
 [triggers]
 crons = [
-  "0 8 * * 1-5",     # 1:00 AM MST weekdays - lights off
-  "30 8 * * SAT",    # 1:30 AM MST Saturday - lights off
-  "30 8 * * SUN",    # 1:30 AM MST Sunday - lights off
-  "*/15 22-23 * * *", # 3PM-5PM MST - check sunset (every 15 min)
-  "*/15 0-2 * * *"    # 5PM-7PM MST - check sunset (every 15 min)
+  "0 7-8 * * *",      # 1:00 AM Denver (UTC-7 MST or UTC-6 MDT) - lights off
+  "*/15 21-23 * * *",  # Sunset check window (covers 3-5PM in both MST/MDT)
+  "*/15 0-2 * * *"     # Sunset check window (covers 5-8PM in both MST/MDT)
 ]
