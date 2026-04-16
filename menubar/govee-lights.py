@@ -41,6 +41,20 @@ DREAMVIEW_CAP = "devices.capabilities.toggle:dreamViewToggle"
 COLOR_CAP = "devices.capabilities.color_setting:colorRgb"
 BRIGHTNESS_CAP = "devices.capabilities.range:brightness"
 
+PRESET_COLORS = [
+    ("Red", 255, 0, 0),
+    ("Orange", 255, 140, 0),
+    ("Warm Orange", 255, 220, 180),
+    ("Yellow", 255, 255, 0),
+    ("Green", 0, 255, 0),
+    ("Cyan", 0, 255, 255),
+    ("Blue", 0, 0, 255),
+    ("Purple", 139, 0, 255),
+    ("Pink", 255, 105, 180),
+    ("Warm White", 255, 244, 229),
+    ("Cool White", 255, 255, 255),
+]
+
 
 def api_headers():
     return {"Content-Type": "application/json", "Govee-API-Key": API_KEY}
@@ -169,6 +183,51 @@ class GoveeLightsApp(NSObject):
             for sku, scenes in sku_scenes.items():
                 self.scene_map[name][sku] = scenes[name]
 
+        # Build scene maps for subsets (minus one device type)
+        # Store the raw sku_scenes so we can compute subsets
+        self.sku_scenes = sku_scenes
+        self._build_subset_scenes()
+
+    @objc.python_method
+    def _build_subset_scenes(self):
+        """Build scene maps for subsets that exclude one device type."""
+        # Map device names to SKUs
+        self.device_sku_map = {}
+        for d in self.devices:
+            if d["name"] != BUSTED_NAME:
+                self.device_sku_map[d["name"]] = d["sku"]
+
+        # For each excludable device, find scenes common to all OTHER SKUs
+        self.subset_scenes = {}  # {exclude_name: {scene_name: {sku: {id, paramId}}}}
+        for exclude_name in ["Table Lamp", "Star Light Projector"]:
+            exclude_sku = self.device_sku_map.get(exclude_name)
+            if not exclude_sku:
+                continue
+            # SKUs remaining after exclusion (might still have the same SKU from other devices)
+            remaining_skus = set()
+            for d in self.devices:
+                if d["name"] != BUSTED_NAME and d["name"] != exclude_name:
+                    remaining_skus.add(d["sku"])
+            # Find scenes common to remaining SKUs
+            remaining_scene_sets = [
+                set(self.sku_scenes[sku].keys())
+                for sku in remaining_skus
+                if sku in self.sku_scenes
+            ]
+            if remaining_scene_sets:
+                subset_common = set.intersection(*remaining_scene_sets)
+            else:
+                subset_common = set()
+            # Only include scenes NOT already in the universal set (extras only)
+            extras = subset_common - set(self.scene_map.keys())
+            scene_data = {}
+            for name in sorted(extras):
+                scene_data[name] = {}
+                for sku in remaining_skus:
+                    if sku in self.sku_scenes and name in self.sku_scenes[sku]:
+                        scene_data[name][sku] = self.sku_scenes[sku][name]
+            self.subset_scenes[exclude_name] = scene_data
+
     # ── Menu building ──────────────────────────────────────────────
 
     @objc.python_method
@@ -228,13 +287,48 @@ class GoveeLightsApp(NSObject):
             )
             no_scenes.setEnabled_(False)
             menu.addItem_(no_scenes)
+        # Subset scenes (minus one device)
+        for exclude_name, extra_scenes in self.subset_scenes.items():
+            if not extra_scenes:
+                continue
+            sub = NSMenu.alloc().init()
+            for scene_name in sorted(extra_scenes.keys()):
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    scene_name, "applySubsetScene:", ""
+                )
+                item.setTarget_(self)
+                item.setRepresentedObject_(
+                    {"scene": scene_name, "exclude": exclude_name}
+                )
+                sub.addItem_(item)
+            label = f"Scenes (minus {exclude_name})"
+            sub_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                label, None, ""
+            )
+            sub_item.setSubmenu_(sub)
+            menu.addItem_(sub_item)
+
         menu.addItem_(NSMenuItem.separatorItem())
 
         # Set All Color
-        color_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Set All Color...", "setAllColor:", ""
+        color_sub = NSMenu.alloc().init()
+        for name, r, g, b in PRESET_COLORS:
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                name, "setAllPresetColor:", ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_((r << 16) | (g << 8) | b)
+            color_sub.addItem_(item)
+        color_sub.addItem_(NSMenuItem.separatorItem())
+        picker_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Color Picker...", "setAllColor:", ""
         )
-        color_item.setTarget_(self)
+        picker_item.setTarget_(self)
+        color_sub.addItem_(picker_item)
+        color_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Set All Color", None, ""
+        )
+        color_item.setSubmenu_(color_sub)
         menu.addItem_(color_item)
 
         # Set All Brightness
@@ -284,8 +378,19 @@ class GoveeLightsApp(NSObject):
 
             dev_sub.addItem_(NSMenuItem.separatorItem())
 
+            for name, r, g, b in PRESET_COLORS:
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    name, "devicePresetColor:", ""
+                )
+                item.setTarget_(self)
+                item.setRepresentedObject_(
+                    {"device": dev, "color": (r << 16) | (g << 8) | b}
+                )
+                dev_sub.addItem_(item)
+            dev_sub.addItem_(NSMenuItem.separatorItem())
+
             color = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                "Set Color...", "deviceColor:", ""
+                "Color Picker...", "deviceColor:", ""
             )
             color.setTarget_(self)
             color.setRepresentedObject_(dev)
@@ -431,7 +536,61 @@ class GoveeLightsApp(NSObject):
                 },
             )
 
+    def applySubsetScene_(self, sender):
+        obj = sender.representedObject()
+        scene_name = obj["scene"]
+        exclude_name = obj["exclude"]
+        threading.Thread(
+            target=self._apply_subset_scene,
+            args=(scene_name, exclude_name),
+            daemon=True,
+        ).start()
+
+    @objc.python_method
+    def _apply_subset_scene(self, scene_name, exclude_name):
+        scene_data = self.subset_scenes.get(exclude_name, {}).get(scene_name)
+        if not scene_data:
+            return
+        for d in self._controllable_devices():
+            if d["name"] == exclude_name:
+                continue
+            sku_scene = scene_data.get(d["sku"])
+            if not sku_scene:
+                continue
+            self._send_control(
+                d["sku"],
+                d["device"],
+                {
+                    "type": "devices.capabilities.on_off",
+                    "instance": "powerSwitch",
+                    "value": 1,
+                },
+            )
+            self._send_control(
+                d["sku"],
+                d["device"],
+                {
+                    "type": "devices.capabilities.dynamic_scene",
+                    "instance": "lightScene",
+                    "value": sku_scene,
+                },
+            )
+
     # ── Actions: Color ─────────────────────────────────────────────
+
+    def setAllPresetColor_(self, sender):
+        color_int = sender.representedObject()
+        threading.Thread(
+            target=self._apply_color, args=("all", color_int), daemon=True
+        ).start()
+
+    def devicePresetColor_(self, sender):
+        obj = sender.representedObject()
+        dev = obj["device"]
+        color_int = obj["color"]
+        threading.Thread(
+            target=self._apply_color, args=(dev, color_int), daemon=True
+        ).start()
 
     def setAllColor_(self, sender):
         self._color_target = "all"
