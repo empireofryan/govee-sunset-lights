@@ -183,8 +183,7 @@ class GoveeLightsApp(NSObject):
             for sku, scenes in sku_scenes.items():
                 self.scene_map[name][sku] = scenes[name]
 
-        # Build scene maps for subsets (minus one device type)
-        # Store the raw sku_scenes so we can compute subsets
+        # Store per-SKU scene data for individual device menus
         self.sku_scenes = sku_scenes
         self._build_subset_scenes()
 
@@ -396,6 +395,26 @@ class GoveeLightsApp(NSObject):
             color.setRepresentedObject_(dev)
             dev_sub.addItem_(color)
 
+            # Per-device scenes
+            dev_scenes = self.sku_scenes.get(dev["sku"], {})
+            if dev_scenes:
+                dev_sub.addItem_(NSMenuItem.separatorItem())
+                scenes_sub = NSMenu.alloc().init()
+                for scene_name in sorted(dev_scenes.keys()):
+                    item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                        scene_name, "deviceScene:", ""
+                    )
+                    item.setTarget_(self)
+                    item.setRepresentedObject_(
+                        {"device": dev, "scene": dev_scenes[scene_name]}
+                    )
+                    scenes_sub.addItem_(item)
+                scenes_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    "Scenes", None, ""
+                )
+                scenes_item.setSubmenu_(scenes_sub)
+                dev_sub.addItem_(scenes_item)
+
             dev_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 dev["name"], None, ""
             )
@@ -535,6 +554,37 @@ class GoveeLightsApp(NSObject):
                     "value": sku_scene,
                 },
             )
+
+    def deviceScene_(self, sender):
+        obj = sender.representedObject()
+        dev = obj["device"]
+        scene = obj["scene"]
+        threading.Thread(
+            target=self._apply_device_scene,
+            args=(dev, scene),
+            daemon=True,
+        ).start()
+
+    @objc.python_method
+    def _apply_device_scene(self, dev, scene):
+        self._send_control(
+            dev["sku"],
+            dev["device"],
+            {
+                "type": "devices.capabilities.on_off",
+                "instance": "powerSwitch",
+                "value": 1,
+            },
+        )
+        self._send_control(
+            dev["sku"],
+            dev["device"],
+            {
+                "type": "devices.capabilities.dynamic_scene",
+                "instance": "lightScene",
+                "value": scene,
+            },
+        )
 
     def applySubsetScene_(self, sender):
         obj = sender.representedObject()
