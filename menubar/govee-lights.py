@@ -35,11 +35,38 @@ from PyObjCTools import AppHelper
 
 GOVEE_API = "https://openapi.api.govee.com/router/api/v1"
 API_KEY = "00b0d8f5-c2cb-4b42-9522-bbcf94492b86"
-BUSTED_NAME = "Busted"
+# The lamp with broken color rendering — white-only, excluded from scenes/colors.
+# Formerly named "Busted"; re-paired as "White Lamp" (colors show wrong, white LEDs fine).
+# Accept either name: it re-joined the account as "Busted" on 2026-10-03.
+BUSTED_NAMES = {"White Lamp", "Busted"}
+WHITE_LAMP_KELVIN = 2200  # dedicated white LEDs, the "white that works"
 ICON_PATH = Path(__file__).parent / "icon.png"
 DREAMVIEW_CAP = "devices.capabilities.toggle:dreamViewToggle"
 COLOR_CAP = "devices.capabilities.color_setting:colorRgb"
+COLOR_TEMP_CAP = "devices.capabilities.color_setting:colorTemperatureK"
 BRIGHTNESS_CAP = "devices.capabilities.range:brightness"
+
+# "Chill" DIY scene on the H6095: nebula only, green laser off (verified 2026-07-31)
+PROJECTOR_SKU = "H6095"
+PROJECTOR_NEBULA_DIY_ID = 22555274
+
+# H1771 wall lights (added 2026-10-12): controlled together as one group
+WALL_LIGHT_NAMES = ["Wall Light", "Wall Light 2"]
+
+# "Scenes (minus X)" menus: label -> device names left out of the scene
+EXCLUDE_GROUPS = {
+    "Table Lamp": ["Table Lamp"],
+    "Star Light Projector": ["Star Light Projector"],
+    "Wall Lights": WALL_LIGHT_NAMES,
+    "Tree Floor Lamp": ["Tree Floor Lamp"],
+}
+
+# When a model has duplicate scene names, which id gets the plain name
+# (picked by eye 2026-10-12). Unlisted duplicates default to the first one,
+# which is right for H1771 (its second Halloween is pink/blue).
+PREFERRED_SCENE_IDS = {
+    "H607C": {"Halloween": 9659},
+}
 
 PRESET_COLORS = [
     ("Red", 255, 0, 0),
@@ -52,7 +79,12 @@ PRESET_COLORS = [
     ("Purple", 139, 0, 255),
     ("Pink", 255, 105, 180),
     ("Warm White", 255, 244, 229),
-    ("Cool White", 255, 255, 255),
+    ("Pure White", 255, 255, 255),
+]
+
+# Whites via dedicated white LEDs (much brighter than RGB-mixed white)
+PRESET_COLOR_TEMPS = [
+    ("BRIGHTEST WHITE", 2200),
 ]
 
 
@@ -139,7 +171,7 @@ class GoveeLightsApp(NSObject):
         sku_scenes = {}
         seen_skus = {}
         for d in self.devices:
-            if d["name"] == BUSTED_NAME:
+            if d["name"] in BUSTED_NAMES:
                 continue
             if d["sku"] not in seen_skus:
                 seen_skus[d["sku"]] = (d["sku"], d["device"])
@@ -162,10 +194,24 @@ class GoveeLightsApp(NSObject):
                 for cap in caps:
                     if cap.get("instance") == "lightScene":
                         for opt in cap.get("parameters", {}).get("options", []):
-                            scenes[opt["name"]] = {
+                            # Some models list two scenes with the same name (H1771 and
+                            # H607C both have two "Halloween"s). Keep the first under the
+                            # plain name and suffix later ones "(2)" instead of replacing
+                            # it; PREFERRED_SCENE_IDS overrides per model.
+                            name = opt["name"]
+                            n = 2
+                            while name in scenes:
+                                name = f"{opt['name']} ({n})"
+                                n += 1
+                            scenes[name] = {
                                 "id": opt["value"]["id"],
                                 "paramId": opt["value"].get("paramId"),
                             }
+                # Swap a preferred duplicate into the plain name
+                for base, pref_id in PREFERRED_SCENE_IDS.get(sku, {}).items():
+                    for name, val in list(scenes.items()):
+                        if val["id"] == pref_id and name != base and base in scenes:
+                            scenes[name], scenes[base] = scenes[base], val
                 sku_scenes[sku] = scenes
             except Exception as e:
                 print(f"Failed to fetch scenes for {sku}: {e}")
@@ -193,19 +239,18 @@ class GoveeLightsApp(NSObject):
         # Map device names to SKUs
         self.device_sku_map = {}
         for d in self.devices:
-            if d["name"] != BUSTED_NAME:
+            if d["name"] not in BUSTED_NAMES:
                 self.device_sku_map[d["name"]] = d["sku"]
 
         # For each excludable device, find scenes common to all OTHER SKUs
         self.subset_scenes = {}  # {exclude_name: {scene_name: {sku: {id, paramId}}}}
-        for exclude_name in ["Table Lamp", "Star Light Projector"]:
-            exclude_sku = self.device_sku_map.get(exclude_name)
-            if not exclude_sku:
+        for exclude_name, excluded in EXCLUDE_GROUPS.items():
+            if not any(n in self.device_sku_map for n in excluded):
                 continue
             # SKUs remaining after exclusion (might still have the same SKU from other devices)
             remaining_skus = set()
             for d in self.devices:
-                if d["name"] != BUSTED_NAME and d["name"] != exclude_name:
+                if d["name"] not in BUSTED_NAMES and d["name"] not in excluded:
                     remaining_skus.add(d["sku"])
             # Find scenes common to remaining SKUs
             remaining_scene_sets = [
@@ -263,6 +308,13 @@ class GoveeLightsApp(NSObject):
         )
         music_item.setSubmenu_(music_sub)
         menu.addItem_(music_item)
+
+        # Star projector nebula-only mode (green laser off)
+        nebula_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Projector: Nebula (No Lasers)", "projectorNebula:", ""
+        )
+        nebula_item.setTarget_(self)
+        menu.addItem_(nebula_item)
         menu.addItem_(NSMenuItem.separatorItem())
 
         # Scenes
@@ -319,6 +371,14 @@ class GoveeLightsApp(NSObject):
             item.setRepresentedObject_((r << 16) | (g << 8) | b)
             color_sub.addItem_(item)
         color_sub.addItem_(NSMenuItem.separatorItem())
+        for name, kelvin in PRESET_COLOR_TEMPS:
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                name, "setAllPresetColorTemp:", ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_(kelvin)
+            color_sub.addItem_(item)
+        color_sub.addItem_(NSMenuItem.separatorItem())
         picker_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Color Picker...", "setAllColor:", ""
         )
@@ -346,8 +406,14 @@ class GoveeLightsApp(NSObject):
         menu.addItem_(bright_item)
         menu.addItem_(NSMenuItem.separatorItem())
 
+        # Wall Lights (both H1771s at once)
+        wall_devs = [d for d in self.devices if d["name"] in WALL_LIGHT_NAMES]
+        if wall_devs:
+            menu.addItem_(self._build_wall_menu(wall_devs))
+            menu.addItem_(NSMenuItem.separatorItem())
+
         # Individual Devices
-        controllable = [d for d in self.devices if d["name"] != BUSTED_NAME]
+        controllable = [d for d in self.devices if d["name"] not in BUSTED_NAMES]
         for dev in controllable:
             dev_sub = NSMenu.alloc().init()
 
@@ -387,6 +453,14 @@ class GoveeLightsApp(NSObject):
                 )
                 dev_sub.addItem_(item)
             dev_sub.addItem_(NSMenuItem.separatorItem())
+            for name, kelvin in PRESET_COLOR_TEMPS:
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    name, "devicePresetColorTemp:", ""
+                )
+                item.setTarget_(self)
+                item.setRepresentedObject_({"device": dev, "kelvin": kelvin})
+                dev_sub.addItem_(item)
+            dev_sub.addItem_(NSMenuItem.separatorItem())
 
             color = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 "Color Picker...", "deviceColor:", ""
@@ -423,12 +497,41 @@ class GoveeLightsApp(NSObject):
 
         menu.addItem_(NSMenuItem.separatorItem())
 
-        # Busted
-        busted_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Busted (skipped)", None, ""
+        # White Lamp — broken color rendering, white-only, excluded from scenes/colors
+        white_lamp = next(
+            (d for d in self.devices if d["name"] in BUSTED_NAMES), None
         )
-        busted_item.setEnabled_(False)
-        menu.addItem_(busted_item)
+        if white_lamp:
+            wl_sub = NSMenu.alloc().init()
+            wl_on = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "On — White", "whiteLampOn:", ""
+            )
+            wl_on.setTarget_(self)
+            wl_sub.addItem_(wl_on)
+            wl_off = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "Off", "whiteLampOff:", ""
+            )
+            wl_off.setTarget_(self)
+            wl_sub.addItem_(wl_off)
+            wl_sub.addItem_(NSMenuItem.separatorItem())
+            for level in [10, 25, 50, 75, 100]:
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    f"Brightness {level}%", "whiteLampBrightness:", ""
+                )
+                item.setTarget_(self)
+                item.setTag_(level)
+                wl_sub.addItem_(item)
+            wl_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "White Lamp (white-only, colors busted)", None, ""
+            )
+            wl_item.setSubmenu_(wl_sub)
+            menu.addItem_(wl_item)
+        else:
+            wl_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "White Lamp (not paired — add in Govee app)", None, ""
+            )
+            wl_item.setEnabled_(False)
+            menu.addItem_(wl_item)
         menu.addItem_(NSMenuItem.separatorItem())
 
         # Refresh / Quit
@@ -443,6 +546,79 @@ class GoveeLightsApp(NSObject):
         menu.addItem_(quit_item)
 
         self.status_item.setMenu_(menu)
+
+    @objc.python_method
+    def _build_wall_menu(self, wall_devs):
+        sub = NSMenu.alloc().init()
+
+        def add(title, caps, menu=sub):
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, "groupControl:", ""
+            )
+            item.setTarget_(self)
+            item.setRepresentedObject_({"devices": wall_devs, "caps": caps})
+            menu.addItem_(item)
+
+        def cap(type_, instance, value):
+            return {
+                "type": f"devices.capabilities.{type_}",
+                "instance": instance,
+                "value": value,
+            }
+
+        power_on = cap("on_off", "powerSwitch", 1)
+        add("Turn On", [power_on])
+        add("Turn Off", [cap("on_off", "powerSwitch", 0)])
+        sub.addItem_(NSMenuItem.separatorItem())
+        add("Wall Wash On", [power_on, cap("toggle", "wallWashingLightToggle", 1)])
+        add("Wall Wash Off", [cap("toggle", "wallWashingLightToggle", 0)])
+        add("Night Light On", [power_on, cap("toggle", "nightlampToggle", 1)])
+        add("Night Light Off", [cap("toggle", "nightlampToggle", 0)])
+        sub.addItem_(NSMenuItem.separatorItem())
+        for level in [10, 25, 50, 75, 100]:
+            add(f"Brightness {level}%", [cap("range", "brightness", level)])
+        sub.addItem_(NSMenuItem.separatorItem())
+        for name, r, g, b in PRESET_COLORS:
+            add(name, [power_on, cap("color_setting", "colorRgb", (r << 16) | (g << 8) | b)])
+        for name, kelvin in PRESET_COLOR_TEMPS:
+            add(name, [power_on, cap("color_setting", "colorTemperatureK", kelvin)])
+
+        # Both lights are the same SKU, so one scene list covers both
+        wall_scenes = self.sku_scenes.get(wall_devs[0]["sku"], {})
+        if wall_scenes:
+            sub.addItem_(NSMenuItem.separatorItem())
+            scenes_sub = NSMenu.alloc().init()
+            for scene_name in sorted(wall_scenes.keys()):
+                add(
+                    scene_name,
+                    [power_on, cap("dynamic_scene", "lightScene", wall_scenes[scene_name])],
+                    menu=scenes_sub,
+                )
+            scenes_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "Scenes", None, ""
+            )
+            scenes_item.setSubmenu_(scenes_sub)
+            sub.addItem_(scenes_item)
+
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Wall Lights (both)", None, ""
+        )
+        item.setSubmenu_(sub)
+        return item
+
+    def groupControl_(self, sender):
+        obj = sender.representedObject()
+        threading.Thread(
+            target=self._group_control,
+            args=(list(obj["devices"]), list(obj["caps"])),
+            daemon=True,
+        ).start()
+
+    @objc.python_method
+    def _group_control(self, devices, caps):
+        for c in caps:
+            for d in devices:
+                self._send_control(d["sku"], d["device"], dict(c))
 
     # ── API helpers ────────────────────────────────────────────────
 
@@ -470,7 +646,7 @@ class GoveeLightsApp(NSObject):
 
     @objc.python_method
     def _controllable_devices(self):
-        return [d for d in self.devices if d["name"] != BUSTED_NAME]
+        return [d for d in self.devices if d["name"] not in BUSTED_NAMES]
 
     # ── Actions: All Lights ────────────────────────────────────────
 
@@ -518,6 +694,103 @@ class GoveeLightsApp(NSObject):
                         "value": 1 if on else 0,
                     },
                 )
+
+    # ── Actions: White Lamp (colors busted, white-only) ────────────
+
+    def whiteLampOn_(self, sender):
+        threading.Thread(target=self._white_lamp_on, daemon=True).start()
+
+    def whiteLampOff_(self, sender):
+        threading.Thread(target=self._white_lamp_power, args=(False,), daemon=True).start()
+
+    def whiteLampBrightness_(self, sender):
+        level = sender.tag()
+        threading.Thread(
+            target=self._white_lamp_brightness, args=(level,), daemon=True
+        ).start()
+
+    @objc.python_method
+    def _white_lamp_device(self):
+        return next((d for d in self.devices if d["name"] in BUSTED_NAMES), None)
+
+    @objc.python_method
+    def _white_lamp_power(self, on):
+        d = self._white_lamp_device()
+        if not d:
+            return
+        self._send_control(
+            d["sku"],
+            d["device"],
+            {
+                "type": "devices.capabilities.on_off",
+                "instance": "powerSwitch",
+                "value": 1 if on else 0,
+            },
+        )
+
+    @objc.python_method
+    def _white_lamp_on(self):
+        d = self._white_lamp_device()
+        if not d:
+            return
+        self._white_lamp_power(True)
+        self._send_control(
+            d["sku"],
+            d["device"],
+            {
+                "type": "devices.capabilities.color_setting",
+                "instance": "colorTemperatureK",
+                "value": WHITE_LAMP_KELVIN,
+            },
+        )
+
+    @objc.python_method
+    def _white_lamp_brightness(self, level):
+        d = self._white_lamp_device()
+        if not d:
+            return
+        self._send_control(
+            d["sku"],
+            d["device"],
+            {
+                "type": "devices.capabilities.range",
+                "instance": "brightness",
+                "value": level,
+            },
+        )
+
+    # ── Actions: Star Projector ────────────────────────────────────
+
+    def projectorNebula_(self, sender):
+        threading.Thread(target=self._projector_nebula, daemon=True).start()
+
+    @objc.python_method
+    def _projector_nebula(self):
+        projector = next(
+            (d for d in self._controllable_devices() if d["sku"] == PROJECTOR_SKU),
+            None,
+        )
+        if not projector:
+            print("Projector not found in device list")
+            return
+        self._send_control(
+            projector["sku"],
+            projector["device"],
+            {
+                "type": "devices.capabilities.on_off",
+                "instance": "powerSwitch",
+                "value": 1,
+            },
+        )
+        self._send_control(
+            projector["sku"],
+            projector["device"],
+            {
+                "type": "devices.capabilities.dynamic_scene",
+                "instance": "diyScene",
+                "value": PROJECTOR_NEBULA_DIY_ID,
+            },
+        )
 
     # ── Actions: Scenes ────────────────────────────────────────────
 
@@ -601,8 +874,9 @@ class GoveeLightsApp(NSObject):
         scene_data = self.subset_scenes.get(exclude_name, {}).get(scene_name)
         if not scene_data:
             return
+        excluded = EXCLUDE_GROUPS.get(exclude_name, [exclude_name])
         for d in self._controllable_devices():
-            if d["name"] == exclude_name:
+            if d["name"] in excluded:
                 continue
             sku_scene = scene_data.get(d["sku"])
             if not sku_scene:
@@ -640,6 +914,18 @@ class GoveeLightsApp(NSObject):
         color_int = obj["color"]
         threading.Thread(
             target=self._apply_color, args=(dev, color_int), daemon=True
+        ).start()
+
+    def setAllPresetColorTemp_(self, sender):
+        kelvin = sender.representedObject()
+        threading.Thread(
+            target=self._apply_color_temp, args=("all", kelvin), daemon=True
+        ).start()
+
+    def devicePresetColorTemp_(self, sender):
+        obj = sender.representedObject()
+        threading.Thread(
+            target=self._apply_color_temp, args=(obj["device"], obj["kelvin"]), daemon=True
         ).start()
 
     def setAllColor_(self, sender):
@@ -686,6 +972,24 @@ class GoveeLightsApp(NSObject):
                         "type": "devices.capabilities.color_setting",
                         "instance": "colorRgb",
                         "value": color_int,
+                    },
+                )
+
+    @objc.python_method
+    def _apply_color_temp(self, target, kelvin):
+        if target == "all":
+            devices = self._controllable_devices()
+        else:
+            devices = [target]
+        for d in devices:
+            if COLOR_TEMP_CAP in d["capabilities"]:
+                self._send_control(
+                    d["sku"],
+                    d["device"],
+                    {
+                        "type": "devices.capabilities.color_setting",
+                        "instance": "colorTemperatureK",
+                        "value": kelvin,
                     },
                 )
 
