@@ -35,11 +35,12 @@ Cloudflare Worker + macOS menu bar app for controlling Govee smart lights.
 cd cloudflare-cron && wrangler deploy
 ```
 
-## Devices (10 in account as of 2026-10-20)
+## Devices (11 in account as of 2026-10-24)
 - Left Corner Light (H607C), Right Corner Light (H607C), Side Light (H607C) — floor lamps
 - Uplighter Floor Lamp (H60B0), Table Lamp (H6022), Star Light Projector (H6095)
 - **Wall Light + Wall Light 2** (H1771, added 2026-10-12): 79 scenes, DreamView, `wallWashingLightToggle` + `nightlampToggle`. Menu bar has a combined "Wall Lights (both)" menu (power, wall wash, night light, brightness, colors, scenes) and a "Scenes (minus Wall Lights)" menu, because H1771 cut the all-lights shared scenes from 20 to 13.
-- **Tree Floor Lamp** (H60B2 `20:69:CC:55:05:86:40:48`, added 2026-10-20): standard caps (power, brightness, color, colorTemp, scenes, DreamView, light1-3 toggles). No code changes needed: worker + menu bar enumerate all account devices. It cut the all-lights shared scenes from 13 to 11 (lost Starry Sky, Thanksgiving); "Scenes (minus Tree Floor Lamp)" menu restores them.
+- **Tree Floor Lamp** (H60B2 `20:69:CC:55:05:86:40:48`, added 2026-10-20): standard caps (power, brightness, color, colorTemp, scenes, DreamView, light1-3 toggles). No code changes needed: worker + menu bar enumerate all account devices. It cut the all-lights shared scenes from 13 to 11 (lost Starry Sky, Thanksgiving); "Scenes (minus Tree Floor Lamps)" menu restores them.
+- **Tree Floor Lamp 2** (H60B2 `2B:15:F1:66:05:86:48:0F`, added 2026-10-24): same model, so the minus menu now leaves out both (`TREE_LAMP_NAMES`).
 - Considering a ceiling light: H60A1 (12", 2400lm) or H60A6 (15" Pro, 4300lm). Cloud-API support unconfirmed until one is on the account; both have LAN API, H60A6 also Matter.
 - **White-only lamp** (H607C `26:AB:CB:24:89:C0:EB:03`, currently named "Busted" in Govee; "White Lamp" also accepted): colors render wrong, white LEDs fine. Excluded from scenes/colors; own white-only submenu (2200K).
 - DreamView music group: all except White Lamp + Table Lamp (Right Corner Light as lead)

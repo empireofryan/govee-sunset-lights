@@ -53,12 +53,16 @@ PROJECTOR_NEBULA_DIY_ID = 22555274
 # H1771 wall lights (added 2026-10-12): controlled together as one group
 WALL_LIGHT_NAMES = ["Wall Light", "Wall Light 2"]
 
+# H60B2 tree floor lamps (second added 2026-10-24): same SKU, so a scene
+# subset only widens when both are left out
+TREE_LAMP_NAMES = ["Tree Floor Lamp", "Tree Floor Lamp 2"]
+
 # "Scenes (minus X)" menus: label -> device names left out of the scene
 EXCLUDE_GROUPS = {
     "Table Lamp": ["Table Lamp"],
     "Star Light Projector": ["Star Light Projector"],
     "Wall Lights": WALL_LIGHT_NAMES,
-    "Tree Floor Lamp": ["Tree Floor Lamp"],
+    "Tree Floor Lamps": TREE_LAMP_NAMES,
 }
 
 # When a model has duplicate scene names, which id gets the plain name
