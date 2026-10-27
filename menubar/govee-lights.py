@@ -5,6 +5,7 @@ import sys
 import os
 import fcntl
 import threading
+import time
 from pathlib import Path
 
 # Single-instance guard
@@ -103,6 +104,8 @@ class GoveeLightsApp(NSObject):
             return None
         self.devices = []
         self.scene_map = {}
+        self.sku_scenes = {}
+        self.subset_scenes = {}
         self._color_target = None
         self.setup_statusbar()
         threading.Thread(target=self._init_data, daemon=True).start()
@@ -138,11 +141,17 @@ class GoveeLightsApp(NSObject):
 
     @objc.python_method
     def _init_data(self):
-        try:
-            self._fetch_devices()
-            self._fetch_all_scenes()
-        except Exception as e:
-            print(f"Init error: {e}")
+        # Retry with backoff: at login the network is often not up yet
+        delay = 5
+        while True:
+            try:
+                self._fetch_devices()
+                self._fetch_all_scenes()
+                break
+            except Exception as e:
+                print(f"Init error (retrying in {delay}s): {e}", flush=True)
+                time.sleep(delay)
+                delay = min(delay * 2, 120)
         self.performSelectorOnMainThread_withObject_waitUntilDone_(
             "buildMenu:", None, False
         )

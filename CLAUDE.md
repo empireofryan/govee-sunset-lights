@@ -56,7 +56,7 @@ New device added in the Govee app? Restart the app (devices load only at startup
 
 ## Current Status
 - Cloudflare worker: last deployed 2026-10-20 (Busted lamp 7 AM-2 AM schedule; crons merged into one hourly trigger)
-- Menu bar app: built 2026-04-15
+- Menu bar app: built 2026-04-15. 2026-10-27: startup fetch now retries with backoff (5s→120s); before, a fetch at login before Wi-Fi was up left the menu stuck on "Loading devices..." forever.
 - Fixed DST bug: uses `Intl` timezone API (`America/Denver`) for automatic MST/MDT handling
 
 ## Important Decisions
